@@ -206,9 +206,7 @@ When ``use_local_quantile_estimation=True``, the calibrator estimates observed q
 
    The calibrator must be fitted (via ``workflow.fit()``) before it can be used for prediction. Calling ``predict()`` on a workflow with an unfitted calibrator will raise a :class:`~openstef_core.exceptions.NotFittedError`.
 
-For a complete worked example showing isotonic and asymmetric conformal
-calibration before and after, including diagnostic plots, see
-:doc:`/tutorials/quantile_calibration`.
+For a complete worked example showing calibration before and after, including diagnostic plots, see :doc:`/tutorials/quantile_calibration`.
 
 Conformalized Quantile Calibration
 ----------------------------------
@@ -216,11 +214,9 @@ Conformalized Quantile Calibration
 OpenSTEF also provides a dependency-free
 :class:`~openstef_models.transforms.postprocessing.ConformalizedQuantileCalibrator`
 that implements asymmetric finite-sample conformal calibration. It is a
-postprocessing transform over a
-``ForecastDataset``:
+postprocessing transform over a ``ForecastDataset``:
 
-1. Fit the forecaster and generate forecasts for a time-ordered calibration
-   period.
+1. Fit the forecaster and generate forecasts for a time-ordered calibration period.
 2. Fit the calibrator on those forecasts and the corresponding actuals.
 3. Apply the fitted corrections to later forecast datasets.
 
@@ -244,6 +240,41 @@ owns the quantile-ordering invariant.
    calibrator = ConformalizedQuantileCalibrator(quantiles=quantiles)
    calibrator.fit(calibration_forecasts_with_actuals)
    calibrated_forecasts = calibrator.transform(forecasts)
+
+MAPIE Quantile Calibration
+--------------------------
+
+For conformal calibration of individual quantiles, OpenSTEF also provides
+:class:`~openstef_models.transforms.postprocessing.MapieQuantileCalibrator`.
+Unlike conformalized quantile regression for a prediction interval, this
+transform calibrates each requested quantile independently. It can therefore be
+used with arbitrary quantile sets, such as P10, P30, P50, P70, and P90, without
+requiring complementary outer quantiles or a P50 median.
+
+The transform uses a separate signed MAPIE residual calibration for every
+quantile. During fitting, it compares each forecast quantile with the observed
+target; during prediction, the learned correction is applied only to the
+matching ``quantile_PXX`` column.
+
+For the underlying conformal prediction concepts and calibration details, see
+the `MAPIE documentation <https://mapie.readthedocs.io/en/stable/>`_. The
+transform must be fitted before prediction, and the calibration data should be
+representative of the deployment period. MAPIE calibration corrects marginal
+quantile coverage; it does not guarantee conditional calibration for every time
+of day, season, or weather regime. The postprocessing pipeline can still apply
+:class:`~openstef_models.transforms.postprocessing.quantile_sorter.QuantileSorter`
+after calibration to enforce row-wise quantile ordering.
+
+.. code-block:: python
+
+   from openstef_core.types import Quantile
+   from openstef_models.transforms.postprocessing import MapieQuantileCalibrator
+
+   workflow.model.postprocessing.transforms.append(
+       MapieQuantileCalibrator(
+           quantiles=[Quantile(0.1), Quantile(0.3), Quantile(0.5), Quantile(0.7), Quantile(0.9)],
+       )
+   )
 
 Evaluating Probabilistic Forecasts
 -----------------------------------
