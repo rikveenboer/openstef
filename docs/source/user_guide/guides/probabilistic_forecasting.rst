@@ -256,6 +256,11 @@ quantile. During fitting, it compares each forecast quantile with the observed
 target; during prediction, the learned correction is applied only to the
 matching ``quantile_PXX`` column.
 
+Because the corrections are estimated independently, the transform sorts the
+calibrated quantile columns once more before returning the forecast. This keeps
+the required monotonic ordering when independent corrections would otherwise
+produce quantile crossings.
+
 For the underlying conformal prediction concepts and calibration details, see
 the `MAPIE documentation <https://mapie.readthedocs.io/en/stable/>`_. The
 transform must be fitted before prediction, and the calibration data should be
