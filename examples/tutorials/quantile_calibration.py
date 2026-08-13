@@ -43,8 +43,7 @@ logger = setup_notebook_logging(
 # %% [markdown]
 # # Quantile Calibration
 #
-# Improve the reliability of probabilistic forecasts using isotonic and
-# asymmetric conformal
+# Improve the reliability of probabilistic forecasts using isotonic and MAPIE
 # quantile calibration. A well-calibrated P10 quantile should exceed actual
 # values roughly 10 % of the time — this tutorial shows how to measure and
 # correct deviations.
@@ -52,16 +51,18 @@ logger = setup_notebook_logging(
 # **What you'll learn:**
 #
 # - Measure quantile calibration with observed coverage
-# - Add isotonic and asymmetric conformal calibration as postprocessing steps
+# - Add isotonic and MAPIE calibration as postprocessing steps
 # - Compare before/after calibration on real data
 #
 # ```{note}
 # This tutorial uses a small data slice for fast execution.
+# See `examples/benchmarks/` for production-scale runs.
 # ```
 #
 # **Key API references:**
 # [`IsotonicQuantileCalibrator`](https://openstef.github.io/openstef/api/generated/openstef_models.transforms.postprocessing.IsotonicQuantileCalibrator.html)
-# · [`ConformalizedQuantileCalibrator`](https://openstef.github.io/openstef/api/generated/openstef_models.transforms.postprocessing.ConformalizedQuantileCalibrator.html)
+# · [`MapieQuantileCalibrator`](https://openstef.github.io/openstef/api/generated/openstef_models.transforms.postprocessing.MapieQuantileCalibrator.html)
+# · [`MAPIE documentation`](https://mapie.readthedocs.io/en/stable/)
 # · [`ForecastingWorkflowConfig`](https://openstef.github.io/openstef/api/generated/openstef_models.presets.ForecastingWorkflowConfig.html)
 
 # %% [markdown]
@@ -87,12 +88,11 @@ dataset = load_liander_dataset()
 
 train_start = datetime.fromisoformat("2024-03-01T00:00:00Z")
 train_end = train_start + timedelta(days=45)
-cal_end = train_end + timedelta(days=4)
-forecast_end = cal_end + timedelta(days=7)
+forecast_end = train_end + timedelta(days=7)
 
 train_dataset = dataset.filter_by_range(start=train_start, end=train_end)
 predict_dataset = dataset.filter_by_range(
-    start=cal_end - timedelta(days=14),
+    start=train_end - timedelta(days=14),
     end=forecast_end,
 )
 
@@ -116,7 +116,7 @@ config = ForecastingWorkflowConfig(
 
 workflow_uncal = create_forecasting_workflow(config=config)
 workflow_uncal.fit(train_dataset)
-forecast_uncal = workflow_uncal.predict(predict_dataset, forecast_start=cal_end)
+forecast_uncal = workflow_uncal.predict(predict_dataset, forecast_start=train_end)
 
 print(f"Forecast rows: {len(forecast_uncal.data)}")
 
@@ -150,16 +150,18 @@ print("Calibration before isotonic correction:")
 print(calibration_df.to_string(index=False))
 
 # %% [markdown]
-# ## Add isotonic and asymmetric conformal calibration
+# ## Add isotonic and MAPIE calibration
 #
 # [`IsotonicQuantileCalibrator`](https://openstef.github.io/openstef/api/generated/openstef_models.transforms.postprocessing.IsotonicQuantileCalibrator.html) learns a
-# monotonic mapping from predicted quantiles to observed quantile levels. It is
-# appended to the workflow's postprocessing pipeline and fitted on training-set
-# predictions automatically.
-# [`ConformalizedQuantileCalibrator`](https://openstef.github.io/openstef/api/generated/openstef_models.transforms.postprocessing.ConformalizedQuantileCalibrator.html)
-# instead applies asymmetric conformal corrections. It leaves
-# P50 unchanged by default and delegates quantile ordering to a downstream
-# `QuantileSorter`.
+# monotonic mapping from predicted quantiles to observed quantile levels.
+# [`MapieQuantileCalibrator`](https://openstef.github.io/openstef/api/generated/openstef_models.transforms.postprocessing.MapieQuantileCalibrator.html)
+# instead fits an independent signed conformal residual correction for every
+# requested quantile. Both transforms fit on the workflow's validation split
+# and correct each quantile during prediction. MAPIE supports arbitrary unique
+# quantile sets; it is not limited to a P10/P50/P90 interval.
+#
+# We create a second workflow identical to the first, but with the calibrator
+# appended to its postprocessing pipeline.
 
 # %%
 from openstef_models.transforms.postprocessing import IsotonicQuantileCalibrator
@@ -176,62 +178,44 @@ workflow_cal.model.postprocessing.transforms.append(
 )
 
 workflow_cal.fit(train_dataset)
-forecast_cal = workflow_cal.predict(predict_dataset, forecast_start=cal_end)
+forecast_cal = workflow_cal.predict(predict_dataset, forecast_start=train_end)
 
 # %% tags=["remove-cell"]
 assert len(forecast_cal.data) > 100, f"Expected >100 calibrated forecast rows, got {len(forecast_cal.data)}"
 
 # %% [markdown]
-# ### Calibrate with the asymmetric conformal transform
+# ### Calibrate each quantile independently with MAPIE
 #
-# Split-conformal calibration requires a **held-out** calibration period that
-# the forecaster was not trained on. We predict that period with the fitted
-# workflow, attach the observed target, and fit the calibrator before applying
-# it to the final holdout forecast.
+# MAPIE uses a separate signed residual correction for each requested quantile.
+# It supports arbitrary unique quantile sets, so it is not restricted to
+# complementary outer quantiles around P50.
 
 # %%
-from openstef_models.transforms.postprocessing import ConformalizedQuantileCalibrator
+from openstef_models.transforms.postprocessing import MapieQuantileCalibrator
 
-calibration_dataset = dataset.filter_by_range(
-    start=train_end - timedelta(days=14),
-    end=cal_end,
-)
-workflow_conformalized = create_forecasting_workflow(
-    config=config.model_copy(update={"model_id": "conformalized_gblinear"})
-)
-workflow_conformalized.fit(train_dataset)
-cal_forecast = workflow_conformalized.predict(calibration_dataset, forecast_start=train_end)
-conformalized_calibrator = ConformalizedQuantileCalibrator(quantiles=quantiles)
-conformalized_calibrator.fit(cal_forecast)
-forecast_conformalized_raw = workflow_conformalized.predict(predict_dataset, forecast_start=cal_end)
-forecast_conformalized = conformalized_calibrator.transform(forecast_conformalized_raw)
+config_mapie = config.model_copy(update={"model_id": "mapie_calibrated_gblinear"})
+workflow_mapie = create_forecasting_workflow(config=config_mapie)
+workflow_mapie.model.postprocessing.transforms = [
+    *workflow_mapie.model.postprocessing.transforms,
+    MapieQuantileCalibrator(quantiles=quantiles),
+]
+
+workflow_mapie.fit(train_dataset)
+forecast_mapie = workflow_mapie.predict(predict_dataset, forecast_start=train_end)
 
 # %% tags=["remove-cell"]
-assert len(forecast_conformalized.data) > 100, "Expected >100 conformalized forecast rows"
+assert len(forecast_mapie.data) > 100, f"Expected >100 MAPIE forecast rows, got {len(forecast_mapie.data)}"
 
 # %% [markdown]
 # ## Compare calibration before and after
-#
-# The following table and plot compare the uncalibrated forecast with both
-# postprocessing approaches on the same holdout rows.
-#
-# ### Isotonic calibration
-#
-# Isotonic calibration learns a monotonic mapping for each quantile. The
-# ``observed (isotonic)`` and ``error (isotonic)`` columns show its effect.
-#
-# ### Asymmetric conformal calibration
-#
-# The ``observed (conformalized)`` and ``error (conformalized)`` columns show
-# the effect of the asymmetric corrections.
 
 # %%
 forecast_cal_aligned = forecast_cal.data.loc[actuals.index]
-forecast_conformalized_aligned = forecast_conformalized.data.loc[actuals.index]
+forecast_mapie_aligned = forecast_mapie.data.loc[actuals.index]
 
 observed_cal = [float((actuals <= forecast_cal_aligned[f"quantile_P{int(float(q) * 100)}"]).mean()) for q in quantiles]
-observed_conformalized = [
-    float((actuals <= forecast_conformalized_aligned[f"quantile_P{int(float(q) * 100)}"]).mean()) for q in quantiles
+observed_mapie = [
+    float((actuals <= forecast_mapie_aligned[f"quantile_P{int(float(q) * 100)}"]).mean()) for q in quantiles
 ]
 
 comparison_df = pd.DataFrame(
@@ -240,10 +224,10 @@ comparison_df = pd.DataFrame(
         "expected": expected,
         "observed (before)": observed_uncal,
         "observed (isotonic)": observed_cal,
-        "observed (conformalized)": observed_conformalized,
+        "observed (MAPIE)": observed_mapie,
         "error (before)": [o - e for o, e in zip(observed_uncal, expected, strict=True)],
         "error (isotonic)": [o - e for o, e in zip(observed_cal, expected, strict=True)],
-        "error (conformalized)": [o - e for o, e in zip(observed_conformalized, expected, strict=True)],
+        "error (MAPIE)": [o - e for o, e in zip(observed_mapie, expected, strict=True)],
     }
 )
 print(comparison_df.to_string(index=False))
@@ -277,7 +261,7 @@ fig.add_trace(
         x=expected,
         y=observed_cal,
         mode="markers+lines",
-        name="After isotonic calibration",
+        name="After calibration",
         marker={"size": 12, "color": "blue"},
         line={"color": "blue", "width": 2},
     )
@@ -286,9 +270,9 @@ fig.add_trace(
 fig.add_trace(
     go.Scatter(
         x=expected,
-        y=observed_conformalized,
+        y=observed_mapie,
         mode="markers+lines",
-        name="After conformalized calibration",
+        name="MAPIE",
         marker={"size": 12, "color": "green", "symbol": "diamond"},
         line={"color": "green", "width": 2, "dash": "dash"},
     )
@@ -307,9 +291,9 @@ fig.show()
 
 # %% [markdown]
 # Points closer to the diagonal indicate better calibration. Isotonic regression
-# learns a monotonic value mapping, while the conformalized calibrator applies
-# asymmetric corrections. Compare both methods on a separate
-# holdout period before selecting one for production. To measure
+# learns a monotonic value mapping, while MAPIE applies a separate conformal
+# residual correction to each requested quantile. Compare both methods on a
+# separate holdout period before selecting one for production. To measure
 # calibration stability over longer time horizons, combine this with a
 # {doc}`backtesting_quickstart`.
 
@@ -320,3 +304,5 @@ fig.show()
 #   realistic operational periods.
 # - {doc}`ensemble_forecasting` — apply calibration to ensemble models
 #   for combined accuracy and reliable uncertainty.
+# - [`MAPIE documentation`](https://mapie.readthedocs.io/en/stable/) — learn
+#   more about the conformal calibration method.
