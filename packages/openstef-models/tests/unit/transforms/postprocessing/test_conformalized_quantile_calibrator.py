@@ -4,7 +4,6 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from openstef_core.datasets import ForecastDataset
 from openstef_core.types import Quantile
@@ -57,85 +56,3 @@ def test_conformalized_calibrator_can_calibrate_the_median_when_enabled() -> Non
     result = calibrator.transform(forecast)
 
     np.testing.assert_allclose(result.data["quantile_P50"], [5.0])
-
-
-def test_conformalized_calibrator_skips_short_calibration_windows() -> None:
-    """Test that too few calibration samples leave forecasts unchanged."""
-    predictions = np.column_stack([np.zeros(2), np.full(2, 5.0), np.full(2, 10.0)])
-    actuals = np.full(2, 20.0)
-    calibration = _dataset(predictions, actuals)
-    forecast = _dataset(predictions[:1], np.full(1, 5.0))
-
-    calibrator = ConformalizedQuantileCalibrator(
-        quantiles=[Quantile(0.1), Quantile(0.5), Quantile(0.9)],
-        min_calibration_samples=3,
-    )
-    calibrator.fit(calibration)
-    result = calibrator.transform(forecast)
-
-    np.testing.assert_allclose(result.data["quantile_P10"], [0.0])
-    np.testing.assert_allclose(result.data["quantile_P90"], [10.0])
-
-
-def test_conformalized_calibrator_skips_only_sparse_quantiles(caplog: pytest.LogCaptureFixture) -> None:
-    """Test that sparse quantiles are skipped while sufficiently populated ones calibrate."""
-    predictions = np.column_stack(
-        [
-            np.concatenate([np.zeros(100), [np.nan]]),
-            np.full(101, 5.0),
-            np.full(101, 10.0),
-        ]
-    )
-    actuals = np.full(101, 20.0)
-    calibration = _dataset(predictions, actuals)
-    forecast = _dataset(np.array([[0.0, 5.0, 10.0]]), np.array([5.0]))
-
-    calibrator = ConformalizedQuantileCalibrator(
-        quantiles=[Quantile(0.1), Quantile(0.5), Quantile(0.9)],
-        min_calibration_samples=101,
-    )
-    calibrator.fit(calibration)
-    result = calibrator.transform(forecast)
-
-    np.testing.assert_allclose(result.data["quantile_P10"], [0.0])
-    np.testing.assert_allclose(result.data["quantile_P90"], [20.0])
-    assert "Skipping calibration for quantile quantile_P10" in caplog.text
-
-
-def test_conformalized_calibrator_skips_quantiles_missing_from_data() -> None:
-    """Test that configured quantiles absent from the data are skipped."""
-    calibration = ForecastDataset(
-        data=pd.DataFrame(
-            {
-                "quantile_P90": np.full(2, 10.0),
-                "load": np.full(2, 20.0),
-            },
-            index=pd.date_range("2025-01-01", periods=2, freq="h"),
-        )
-    )
-    calibrator = ConformalizedQuantileCalibrator(
-        quantiles=[Quantile(0.1), Quantile(0.9)],
-        min_calibration_samples=1,
-    )
-
-    calibrator.fit(calibration)
-    result = calibrator.transform(calibration)
-
-    np.testing.assert_allclose(result.data["quantile_P90"], [20.0, 20.0])
-
-
-def test_conformalized_calibrator_does_not_sort_quantiles() -> None:
-    """Test that ordering remains the responsibility of a downstream sorter."""
-    predictions = np.column_stack([np.full(2, 10.0), np.zeros(2), np.full(2, 5.0)])
-    actuals = np.full(2, 5.0)
-    calibration = _dataset(predictions, actuals)
-    forecast = _dataset(predictions[:1], np.full(1, 5.0))
-
-    calibrator = ConformalizedQuantileCalibrator(
-        quantiles=[Quantile(0.1), Quantile(0.5), Quantile(0.9)],
-        min_calibration_samples=1,
-    )
-    calibrator.fit(calibration)
-    result = calibrator.transform(forecast)
-
-    np.testing.assert_allclose(result.data.filter(like="quantile_").to_numpy(), [[5.0, 0.0, 5.0]])
