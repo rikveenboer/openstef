@@ -333,6 +333,23 @@ time-ordered calibration split is preferable when the data and workflow allow
 it. The wrapper does not sort quantiles. Downstream :class:`~openstef_models.transforms.postprocessing.quantile_sorter.QuantileSorter`
 remains responsible for enforcing row-wise ordering.
 
+The wrapper can be used around an individual base forecaster:
+
+.. code-block:: python
+
+   from datetime import timedelta
+   from openstef_models.models.forecasting import ConformalizedForecaster
+
+   calibrated_forecaster = ConformalizedForecaster(
+       inner=base_forecaster,
+       calibration_length=timedelta(days=14),
+       conformalize_median=False,
+   )
+
+The wrapped forecaster can then be supplied to an ensemble in place of the
+unwrapped base forecaster. Each wrapped forecaster estimates its own corrections
+from its own predictions before the combiner sees them.
+
 The two modes should therefore be evaluated separately. A benchmark that
 calibrates only the final ensemble does not establish that per-base wrapping
 improves the ensemble, and vice versa. Both modes should report marginal

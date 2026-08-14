@@ -7,3 +7,7 @@
 Concrete forecaster implementations for different ML frameworks.
 The base `Forecaster` interface lives in the ``forecaster`` module.
 """
+
+from openstef_models.models.forecasting.conformalized_forecaster import ConformalizedForecaster
+
+__all__ = ["ConformalizedForecaster"]
