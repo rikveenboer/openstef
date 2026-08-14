@@ -350,6 +350,14 @@ The wrapped forecaster can then be supplied to an ensemble in place of the
 unwrapped base forecaster. Each wrapped forecaster estimates its own corrections
 from its own predictions before the combiner sees them.
 
+.. note::
+
+   One limitation remains intentionally explicit: this adds the wrapper itself,
+   but does not yet modify ``EnsembleForecastingModel`` to automatically wrap
+   selected base forecasters. The next integration step should address ensemble
+   wiring and fitted calibration-state serialization before treating this as
+   production-ready.
+
 The two modes should therefore be evaluated separately. A benchmark that
 calibrates only the final ensemble does not establish that per-base wrapping
 improves the ensemble, and vice versa. Both modes should report marginal
