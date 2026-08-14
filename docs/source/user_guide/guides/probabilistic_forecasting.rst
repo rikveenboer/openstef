@@ -271,11 +271,11 @@ from its own predictions before the combiner sees them.
    wiring and fitted calibration-state serialization before treating this as
    production-ready.
 
-The two modes should therefore be evaluated separately. A benchmark that
-calibrates only the final ensemble does not establish that per-base wrapping
-improves the ensemble, and vice versa. Both modes should report marginal
-coverage, interval coverage, interval width, point-forecast quality, and
-quantile-order violations before and after downstream sorting.
+These modes should therefore be evaluated separately. Final-ensemble calibration
+does not establish that per-base wrapping improves the ensemble, and vice versa.
+Both modes should report marginal coverage, interval coverage, interval width,
+point-forecast quality, and quantile-order violations before and after downstream
+sorting.
 
 Evaluating Probabilistic Forecasts
 -----------------------------------
