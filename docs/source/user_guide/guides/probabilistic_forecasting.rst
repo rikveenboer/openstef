@@ -297,6 +297,48 @@ after calibration to enforce row-wise quantile ordering.
 
 For a complete worked example showing calibration before and after, including diagnostic plots, see :doc:`/tutorials/quantile_calibration`.
 
+Calibration Placement: Final Forecast or Base Forecaster
+---------------------------------------------------------
+
+``ConformalizedQuantileCalibrator`` can be used in two materially different
+locations in an ensemble pipeline. These locations should not be treated as
+equivalent:
+
+* **Final-forecast postprocessing** applies calibration after the ensemble
+  combiner: ``base forecasts -> ensemble -> calibration -> sorting``. This
+  calibrates the forecast that is actually delivered to users and is the
+  natural interpretation of a postprocessing transform.
+* **Reference-style wrapping** applies calibration to each selected base
+  forecaster before the combiner: ``base forecast -> calibration -> ensemble``.
+  This calibrates the component forecasts and lets the combiner consume their
+  corrected quantiles.
+
+In general, these operations do not commute:
+
+.. math::
+
+   C(E(f_1, f_2)) \ne E(C_1(f_1), C_2(f_2))
+
+The difference is especially relevant for learned or nonlinear combiners,
+different corrections per base model, and quantile-specific ensemble weights.
+Final-forecast calibration answers ``are the outputs of this complete
+forecasting system calibrated?``. Reference-style wrapping answers ``are the
+individual base forecasters calibrated before they are combined?``.
+
+The reference-style wrapper in OpenSTEF fits the inner forecaster first, uses a
+recent contiguous slice of its training data to estimate corrections, and
+applies those corrections to subsequent predictions. This is in-sample
+calibration by design and can produce optimistic corrections; an independent,
+time-ordered calibration split is preferable when the data and workflow allow
+it. The wrapper does not sort quantiles. Downstream :class:`~openstef_models.transforms.postprocessing.quantile_sorter.QuantileSorter`
+remains responsible for enforcing row-wise ordering.
+
+The two modes should therefore be evaluated separately. A benchmark that
+calibrates only the final ensemble does not establish that per-base wrapping
+improves the ensemble, and vice versa. Both modes should report marginal
+coverage, interval coverage, interval width, point-forecast quality, and
+quantile-order violations before and after downstream sorting.
+
 Evaluating Probabilistic Forecasts
 -----------------------------------
 
