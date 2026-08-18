@@ -245,6 +245,43 @@ owns the quantile-ordering invariant.
    calibrator.fit(calibration_forecasts_with_actuals)
    calibrated_forecasts = calibrator.transform(forecasts)
 
+Reference-Style Forecaster Wrapping
+-----------------------------------
+
+For pipelines that combine multiple base forecasters, OpenSTEF also provides
+:class:`~openstef_models.models.forecasting.ConformalizedForecaster`. It wraps
+one forecaster and applies conformal corrections to that forecaster's
+predictions before an ensemble combines them.
+
+The wrapper fits the inner forecaster first, then uses a recent contiguous slice
+of the available training data to estimate the corrections. This is the
+reference-style behavior and can produce optimistic in-sample corrections. Use
+:class:`~openstef_models.transforms.postprocessing.ConformalizedQuantileCalibrator`
+directly with a held-out, time-ordered calibration period when independent
+calibration data is available.
+
+The wrapper does not sort quantiles. Downstream
+:class:`~openstef_models.transforms.postprocessing.quantile_sorter.QuantileSorter`
+remains responsible for enforcing quantile ordering.
+
+.. code-block:: python
+
+   from datetime import timedelta
+
+   from openstef_models.models.forecasting import ConformalizedForecaster
+
+   calibrated_forecaster = ConformalizedForecaster(
+       inner=base_forecaster,
+       calibration_length=timedelta(days=14),
+       conformalize_median=False,
+   )
+   calibrated_forecaster.fit(training_data)
+   calibrated_forecast = calibrated_forecaster.predict(forecast_input)
+
+The wrapper is currently an explicit building block; it does not automatically
+modify ``EnsembleForecastingModel`` or serialize fitted calibration state for
+ensemble configuration. Those are follow-up integration concerns.
+
 Evaluating Probabilistic Forecasts
 -----------------------------------
 
