@@ -206,51 +206,68 @@ When ``use_local_quantile_estimation=True``, the calibrator estimates observed q
 
    The calibrator must be fitted (via ``workflow.fit()``) before it can be used for prediction. Calling ``predict()`` on a workflow with an unfitted calibrator will raise a :class:`~openstef_core.exceptions.NotFittedError`.
 
-For a complete worked example showing isotonic and reference-aligned conformal
+For a complete worked example showing isotonic and asymmetric conformal
 calibration before and after, including diagnostic plots, see
 :doc:`/tutorials/quantile_calibration`.
 
-Calibration Placement: Final Forecast or Base Forecaster
----------------------------------------------------------
+Conformalized Quantile Calibration
+----------------------------------
 
-``ConformalizedQuantileCalibrator`` can be used in two materially different
-locations in an ensemble pipeline. These locations should not be treated as
-equivalent:
+OpenSTEF also provides a dependency-free
+:class:`~openstef_models.transforms.postprocessing.ConformalizedQuantileCalibrator`
+that implements asymmetric finite-sample conformal calibration. It is a
+postprocessing transform over a
+``ForecastDataset``:
 
-* **Final-forecast postprocessing** applies calibration after the ensemble
-  combiner: ``base forecasts -> ensemble -> calibration -> sorting``. This
-  calibrates the forecast that is actually delivered to users and is the
-  natural interpretation of a postprocessing transform.
-* **Reference-style wrapping** applies calibration to each selected base
-  forecaster before the combiner: ``base forecast -> calibration -> ensemble``.
-  This calibrates the component forecasts and lets the combiner consume their
-  corrected quantiles.
+1. Fit the forecaster and generate forecasts for a time-ordered calibration
+   period.
+2. Fit the calibrator on those forecasts and the corresponding actuals.
+3. Apply the fitted corrections to later forecast datasets.
 
-In general, these operations do not commute:
+The correction is asymmetric by tail. For a lower quantile ``q < 0.5``, the
+calibrator uses ``forecast - actual`` scores and subtracts the finite-sample
+quantile at ``1 - q``. For an upper quantile ``q >= 0.5``, it uses ``actual -
+forecast`` scores and adds the finite-sample quantile at ``q``. The finite-sample
+level is adjusted with ``min(level * (n + 1) / n, 1)`` and estimated with
+NumPy's ``method="higher"`` convention.
 
-.. math::
+By default, P50 is unchanged and quantile columns are not sorted inside the
+calibrator. This preserves the specified semantics: median calibration is an
+explicit opt-in, while downstream
+:class:`~openstef_models.transforms.postprocessing.quantile_sorter.QuantileSorter`
+owns the quantile-ordering invariant.
 
-   C(E(f_1, f_2)) \ne E(C_1(f_1), C_2(f_2))
+.. code-block:: python
 
-The difference is especially relevant for learned or nonlinear combiners,
-different corrections per base model, and quantile-specific ensemble weights.
-Final-forecast calibration answers ``are the outputs of this complete
-forecasting system calibrated?``. Reference-style wrapping answers ``are the
-individual base forecasters calibrated before they are combined?``.
+   from openstef_models.transforms.postprocessing import ConformalizedQuantileCalibrator
 
-The reference-style wrapper in OpenSTEF fits the inner forecaster first, uses a
-recent contiguous slice of its training data to estimate corrections, and
-applies those corrections to subsequent predictions. This is in-sample
-calibration by design and can produce optimistic corrections; an independent,
-time-ordered calibration split is preferable when the data and workflow allow
-it. The wrapper does not sort quantiles. Downstream :class:`~openstef_models.transforms.postprocessing.quantile_sorter.QuantileSorter`
-remains responsible for enforcing row-wise ordering.
+   calibrator = ConformalizedQuantileCalibrator(quantiles=quantiles)
+   calibrator.fit(calibration_forecasts_with_actuals)
+   calibrated_forecasts = calibrator.transform(forecasts)
 
-The wrapper can be used around an individual base forecaster:
+Reference-Style Forecaster Wrapping
+-----------------------------------
+
+For pipelines that combine multiple base forecasters, OpenSTEF also provides
+:class:`~openstef_models.models.forecasting.ConformalizedForecaster`. It wraps
+one forecaster and applies conformal corrections to that forecaster's
+predictions before an ensemble combines them.
+
+The wrapper fits the inner forecaster first, then uses a recent contiguous slice
+of the available training data to estimate the corrections. This is the
+reference-style behavior and can produce optimistic in-sample corrections. Use
+:class:`~openstef_models.transforms.postprocessing.ConformalizedQuantileCalibrator`
+directly with a held-out, time-ordered calibration period when independent
+calibration data is available.
+
+The wrapper does not sort quantiles. Downstream
+:class:`~openstef_models.transforms.postprocessing.quantile_sorter.QuantileSorter`
+remains responsible for enforcing quantile ordering.
 
 .. code-block:: python
 
    from datetime import timedelta
+
    from openstef_models.models.forecasting import ConformalizedForecaster
 
    calibrated_forecaster = ConformalizedForecaster(
@@ -258,24 +275,12 @@ The wrapper can be used around an individual base forecaster:
        calibration_length=timedelta(days=14),
        conformalize_median=False,
    )
+   calibrated_forecaster.fit(training_data)
+   calibrated_forecast = calibrated_forecaster.predict(forecast_input)
 
-The wrapped forecaster can then be supplied to an ensemble in place of the
-unwrapped base forecaster. Each wrapped forecaster estimates its own corrections
-from its own predictions before the combiner sees them.
-
-.. note::
-
-   One limitation remains intentionally explicit: this adds the wrapper itself,
-   but does not yet modify ``EnsembleForecastingModel`` to automatically wrap
-   selected base forecasters. The next integration step should address ensemble
-   wiring and fitted calibration-state serialization before treating this as
-   production-ready.
-
-These modes should therefore be evaluated separately. Final-ensemble calibration
-does not establish that per-base wrapping improves the ensemble, and vice versa.
-Both modes should report marginal coverage, interval coverage, interval width,
-point-forecast quality, and quantile-order violations before and after downstream
-sorting.
+The wrapper is currently an explicit building block; it does not automatically
+modify ``EnsembleForecastingModel`` or serialize fitted calibration state for
+ensemble configuration. Those are follow-up integration concerns.
 
 Evaluating Probabilistic Forecasts
 -----------------------------------
